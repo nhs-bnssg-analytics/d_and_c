@@ -26,10 +26,14 @@ long_data <- model_summary |>
       `Model type` == "Random forest" ~ "RF",
       .default = "unknown"
     ),
-    `Target variable type` = case_when(
-      `Target variable type` == "proportion" ~ "(proportion)",
-      .default = "(CiP)"
+    `Model type` = case_when(
+      `Target variable type` == "proportion" ~ `Model type`,
+      .default = paste0(`Model type`, "y")
     ),
+    # `Target variable type` = case_when(
+    #   `Target variable type` == "proportion" ~ "(proportion)",
+    #   .default = "(CiP)"
+    # ),
     scenario_broad = paste0(
       `Target variable type`,
       " (n=",
@@ -63,18 +67,13 @@ detailed_plot_data <- long_data |>
         scenario == "Test set value" ~ "Test set value (with lagged target value incl. as predictor)",
       .default = scenario
     ),
-    facet = str_wrap(
-      paste(
-        `Model type`, `Target variable type`
-      ),
-      30
-    ),
+    facet = `Model type`,
     facet = factor(
       facet,
       levels = c(
-        "GLM (proportion)",
-        "RF (proportion)",
-        "RF (CiP)"
+        "GLM",
+        "RF",
+        "RFy"
       )
     ),
     x_axis = paste0(
@@ -218,52 +217,44 @@ boxplot_mape_results <- function(data) {
   return(plot)
 }
 
-summary_plot_without_52rtt <- long_data |> 
-  # filter(
-  #   !grepl("52", `Target variable detailed`)
-  # ) |> 
+reorder_vector <- function(vector, first_vars) {
+  new_vector <- c(
+    first_vars,
+    vector[!(vector %in% first_vars)]
+  )
+  
+  return(new_vector)
+}
+
+summary_plot <- long_data |> 
   mutate(
     scenario = case_when(
-      scenario == "Test set value" ~ paste(`Model type`, scenario_broad,
-                                           sep = " - "),
+      scenario == "Test set value" ~ paste(
+        `Model type`, 
+        gsub("^.*\\(", "\\(", scenario_broad),
+        sep = " - "
+      ),
       .default = scenario
     ),
     scenario = gsub("\\) \\(", ", ", scenario),
-    scenario = str_wrap(scenario, 20)
+    scenario = str_wrap(scenario, 20),
+    scenario = factor(
+      scenario,
+      levels = reorder_vector(
+        unique(scenario),
+        first_vars = c("NB1", "NB2")
+      )
+    )
   ) |> 
   boxplot_mape_results()
   
 
-summary_plot_52rtt <- long_data |> 
-  filter(
-    grepl("52", `Target variable detailed`)
-  ) |> 
-  mutate(
-    scenario = case_when(
-      scenario == "Test set value" ~ paste(`Model type`, scenario_broad,
-                                           sep = " - "),
-      .default = scenario
-    ),
-    scenario = gsub("\\) \\(", ", ", scenario),
-    scenario = str_wrap(scenario, 20)
-  ) |> 
-  boxplot_mape_results() +
-  scale_y_log10()
 
 ggsave(
-  plot = summary_plot_without_52rtt,
-  "ad_hoc/paper/images/model_validation_broad_no_52rtt.png",
-  width = 6,
+  plot = summary_plot,
+  "ad_hoc/paper/images/model_validation_broad.png",
+  width = 9,
   height = 6,
-  units = "in",
-  bg = "white"
-)
-
-ggsave(
-  plot = summary_plot_52rtt,
-  "ad_hoc/paper/images/model_validation_broad_52rtt.png",
-  width = 3,
-  height = 3,
   units = "in",
   bg = "white"
 )

@@ -12,7 +12,7 @@ model_types <- readRDS(final_models) |>
   list_rbind(
     names_to = "performance_metric"
   ) |>
-  filter(!grepl("52", performance_metric)) |> 
+  # filter(!grepl("52", performance_metric)) |> 
   select(!any_of(c("total_cases", "month", "quarter", "year", "nhs_region", "org"))) |>
   summarise(
     across(everything(),
@@ -58,10 +58,10 @@ plot_perm_imp <- function(model_types, type_filter, final_models) {
       relationship = "many-to-one"
     ) |> 
     filter(
-      type == type_filter
+      type %in% type_filter
     ) |> 
     mutate(
-      Variable = stringr::str_wrap(Variable, 40),
+      Variable = stringr::str_wrap(Variable, 45),
       performance_metric = stringr::str_wrap(performance_metric, 30)
     ) |> 
     ggplot(
@@ -110,33 +110,19 @@ plot_perm_imp <- function(model_types, type_filter, final_models) {
   return(p)
 }
 
-prop <- plot_perm_imp(
+perm_imp <- plot_perm_imp(
   model_types = model_types,
-  type_filter = "proportion",
-  final_models = final_models
-)
-debugonce(plot_perm_imp)
-change <- plot_perm_imp(
-  model_types = model_types,
-  type_filter = "change",
+  type_filter = c("proportion", "change"),
   final_models = final_models
 )
 
 
 
 ggsave(
-  plot = prop,
-  "ad_hoc/paper/images/permutation_importance_proportion.png",
-  width = 7,
-  height = 3.5,
-  units = "in",
-  bg = "white"
-)
-ggsave(
-  plot = change,
-  "ad_hoc/paper/images/permutation_importance_change.png",
+  plot = perm_imp,
+  "ad_hoc/paper/images/permutation_importance.png",
   width = 10,
-  height = 7,
+  height = 8.5,
   units = "in",
   bg = "white"
 )
