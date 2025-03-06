@@ -37,8 +37,8 @@ long_data <- model_summary |>
       ")"
     ),
     scenario = case_when(
-      grepl("linear", scenario) ~ "Baseline - 3 year linear extrapolation",
-      grepl("same as last year", scenario) ~ "Baseline - same value as last year",
+      grepl("linear", scenario) ~ "NB2",
+      grepl("same as last year", scenario) ~ "NB1",
       .default = scenario
     )
   ) |> 
@@ -122,8 +122,8 @@ detailed_plot <- detailed_plot_data |>
   scale_shape_manual(
     name = "",
     values = c(
-      "Baseline - same value as last year" = 15,
-      "Baseline - 3 year linear extrapolation" = 15,
+      "NB1" = 15,
+      "NB2" = 15,
       "Test set value" = 16,
       "Test set value (with lagged target value incl. as predictor)" = 21
     )
@@ -131,8 +131,8 @@ detailed_plot <- detailed_plot_data |>
   scale_linetype_manual(
     name = "",
     values = c(
-      "Baseline - same value as last year" = "solid",
-      "Baseline - 3 year linear extrapolation" = "solid",
+      "NB1" = "solid",
+      "NB2" = "solid",
       "Test set value" = NA,
       "Test set value (with lagged target value incl. as predictor)" = NA
     )
@@ -140,8 +140,8 @@ detailed_plot <- detailed_plot_data |>
   scale_size_manual(
     name = "",
     values = c(
-      "Baseline - same value as last year" = 0.8,
-      "Baseline - 3 year linear extrapolation" = 0.8,
+      "NB1" = 0.8,
+      "NB2" = 0.8,
       "Test set value" = 1,
       "Test set value (with lagged target value incl. as predictor)" = 1
     )
@@ -149,8 +149,8 @@ detailed_plot <- detailed_plot_data |>
   scale_colour_manual(
     name = "",
     values = c(
-      "Baseline - same value as last year" = "gray45",
-      "Baseline - 3 year linear extrapolation" = "gray75",
+      "NB1" = "gray45",
+      "NB2" = "gray75",
       "Test set value" = "black",
       "Test set value (with lagged target value incl. as predictor)" = "black"
     )
@@ -210,15 +210,18 @@ boxplot_mape_results <- function(data) {
     labs(
       y = "Mean absolute percentage error",
       x = ""
+    ) +
+    coord_cartesian(
+      ylim = c(0, 100)
     )
   
   return(plot)
 }
 
 summary_plot_without_52rtt <- long_data |> 
-  filter(
-    !grepl("52", `Target variable detailed`)
-  ) |> 
+  # filter(
+  #   !grepl("52", `Target variable detailed`)
+  # ) |> 
   mutate(
     scenario = case_when(
       scenario == "Test set value" ~ paste(`Model type`, scenario_broad,
