@@ -1,11 +1,11 @@
 source("R/00_libraries.R")
 model_summary <- readRDS("tests/model_testing/model_summary_information.rds")
 
-long_data <- model_summary |> 
+long_data <- model_summary |>
   filter(
-    `Tuning objective` == "mape"#,
+    `Tuning objective` == "mape" #,
     # !grepl("52", `Target variable`)
-  ) |> 
+  ) |>
   pivot_longer(
     cols = c(`Test set value`, starts_with("Baseline")),
     names_to = "scenario",
@@ -14,11 +14,15 @@ long_data <- model_summary |>
   mutate(
     count_of_models = n(),
     .by = c(`Target variable`, `Model type`, `Target variable type`)
-  ) |> 
+  ) |>
   mutate(
     `Target variable detailed` = str_wrap(`Target variable`, 25),
     `Target variable broad` = str_wrap(`Target variable`, 40),
-    `Number lagged target years` = gsub(" lagged years", "", `Number lagged target years`),
+    `Number lagged target years` = gsub(
+      " lagged years",
+      "",
+      `Number lagged target years`
+    ),
     `Years in dataset` = `Number training years` + 1,
     `Model type` = str_to_sentence(gsub("_", " ", `Model type`)),
     `Model type` = case_when(
@@ -45,7 +49,7 @@ long_data <- model_summary |>
       grepl("same as last year", scenario) ~ "NB1",
       .default = scenario
     )
-  ) |> 
+  ) |>
   select(
     "Target variable detailed",
     "Target variable broad",
@@ -60,11 +64,12 @@ long_data <- model_summary |>
   )
 
 
-detailed_plot_data <- long_data |> 
+detailed_plot_data <- long_data |>
   mutate(
     scenario = case_when(
       `Number lagged target years` == 1 &
-        scenario == "Test set value" ~ "Test set value (with lagged target value incl. as predictor)",
+        scenario ==
+          "Test set value" ~ "Test set value (with lagged target value incl. as predictor)",
       .default = scenario
     ),
     facet = `Model type`,
@@ -77,25 +82,40 @@ detailed_plot_data <- long_data |>
       )
     ),
     x_axis = paste0(
-      `Years in dataset`, 
+      `Years in dataset`,
       "[",
       `Number lagged years`,
       "]"
     )
   )
 
-x_breaks <- detailed_plot_data |> 
+x_breaks <- detailed_plot_data |>
   pull(
     x_axis
-  ) |> 
+  ) |>
   unique()
 
-x_labels <- x_breaks |> 
+x_labels <- x_breaks |>
   sapply(
     function(x) parse(text = x)[[1]]
   )
 
-detailed_plot <- detailed_plot_data |> 
+detailed_plot <- detailed_plot_data |>
+  mutate(
+    `Target variable detailed` = case_when(
+      `Target variable detailed` ==
+        "Proportion of incomplete\npathways greater than 52\nweeks from referral" ~ "RTT52 metric",
+      `Target variable detailed` ==
+        "Proportion of suspected\ncancer or referral\nto first definitive\ntreatment that are longer\nthan 62 days wait" ~ "Cancer metric",
+      `Target variable detailed` ==
+        "Proportion of A&E\nattendances with greater\nthan 4 hours wait (Type 1\nDepartments - Major A&E)" ~ "A&E metric",
+      `Target variable detailed` ==
+        "Proportion of attended\nGP appointments (over 4\nweeks wait time)" ~ "GP metric",
+      `Target variable detailed` ==
+        "Proportion of incomplete\npathways greater than 18\nweeks from referral" ~ "RTT18 metric",
+      .default = NA_character_
+    )
+  ) |>
   ggplot(
     aes(
       y = mape,
@@ -162,7 +182,7 @@ detailed_plot <- detailed_plot_data |>
     rows = vars(`Target variable detailed`),
     cols = vars(facet),
     scales = "free",
-    axes = "all", 
+    axes = "all",
     axis.labels = "all_x"
   ) +
   theme_bw() +
@@ -170,14 +190,23 @@ detailed_plot <- detailed_plot_data |>
     legend.position = "bottom"
   ) +
   labs(
-    y = "Mean absolute percentage error",
+    y = "Mean Absolute Percentage Error (MAPE)",
     x = expression(`Years in dataset`[`Number of lagged years`])
   ) +
   scale_y_log10()
 
 ggsave(
   plot = detailed_plot,
-  "ad_hoc/paper/images/model_validation.png",
+  "ad_hoc/paper/images/Fig_4.png",
+  width = 12,
+  height = 10,
+  units = "in",
+  bg = "white"
+)
+
+ggsave(
+  plot = detailed_plot,
+  "ad_hoc/paper/images/Fig_4.pdf",
   width = 12,
   height = 10,
   units = "in",
@@ -186,10 +215,24 @@ ggsave(
 
 
 boxplot_mape_results <- function(data) {
-  plot <- data |> 
+  plot <- data |>
+    mutate(
+      `Target variable broad` = case_when(
+        `Target variable detailed` ==
+          "Proportion of incomplete\npathways greater than 52\nweeks from referral" ~ "RTT52 metric",
+        `Target variable detailed` ==
+          "Proportion of suspected\ncancer or referral\nto first definitive\ntreatment that are longer\nthan 62 days wait" ~ "Cancer metric",
+        `Target variable detailed` ==
+          "Proportion of A&E\nattendances with greater\nthan 4 hours wait (Type 1\nDepartments - Major A&E)" ~ "A&E metric",
+        `Target variable detailed` ==
+          "Proportion of attended\nGP appointments (over 4\nweeks wait time)" ~ "GP metric",
+        `Target variable detailed` ==
+          "Proportion of incomplete\npathways greater than 18\nweeks from referral" ~ "RTT18 metric",
+        .default = NA_character_
+      )
+    ) |>
     ggplot(
-      aes(x = scenario,
-          y = mape)
+      aes(x = scenario, y = mape)
     ) +
     geom_boxplot() +
     facet_wrap(
@@ -207,13 +250,13 @@ boxplot_mape_results <- function(data) {
       legend.position = "bottom"
     ) +
     labs(
-      y = "Mean absolute percentage error",
+      y = "Mean Absolute Percentage Error (MAPE)",
       x = ""
     ) +
     coord_cartesian(
       ylim = c(0, 100)
     )
-  
+
   return(plot)
 }
 
@@ -222,15 +265,15 @@ reorder_vector <- function(vector, first_vars) {
     first_vars,
     vector[!(vector %in% first_vars)]
   )
-  
+
   return(new_vector)
 }
 
-summary_plot <- long_data |> 
+summary_plot <- long_data |>
   mutate(
     scenario = case_when(
       scenario == "Test set value" ~ paste(
-        `Model type`, 
+        `Model type`,
         gsub("^.*\\(", "\\(", scenario_broad),
         sep = " - "
       ),
@@ -245,14 +288,22 @@ summary_plot <- long_data |>
         first_vars = c("NB1", "NB2")
       )
     )
-  ) |> 
+  ) |>
   boxplot_mape_results()
-  
 
 
 ggsave(
   plot = summary_plot,
-  "ad_hoc/paper/images/model_validation_broad.png",
+  "ad_hoc/paper/images/Fig_3.png",
+  width = 9,
+  height = 6,
+  units = "in",
+  bg = "white"
+)
+
+ggsave(
+  plot = summary_plot,
+  "ad_hoc/paper/images/Fig_3.pdf",
   width = 9,
   height = 6,
   units = "in",

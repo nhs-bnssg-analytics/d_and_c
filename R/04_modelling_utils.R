@@ -3,137 +3,150 @@
 #'   are attributed to training.
 #' @value a numeric vector of length 2 representing the proportions of the total
 #'   dataset that should be split into training and validation
-train_validation_proportions <- function(data, shuffle_training_records = FALSE) {
-  
-  proportions <- data |> 
-    count(year) |> 
-    arrange(year) |> 
+train_validation_proportions <- function(
+  data,
+  shuffle_training_records = FALSE
+) {
+  proportions <- data |>
+    count(year) |>
+    arrange(year) |>
     mutate(
       split_type = case_when(
         row_number() == n() ~ "test",
         row_number() == (n() - 1) ~ "validation",
         .default = "train"
       )
-    ) |> 
+    ) |>
     summarise(
       records = sum(n),
       .by = split_type
-    ) |> 
+    ) |>
     mutate(
       proportions = records / sum(records)
-    ) |> 
+    ) |>
     pull(
       proportions
-    ) |> 
+    ) |>
     head(2)
-  
+
   if (shuffle_training_records) {
     proportions <- sum(proportions) * c(0.75, 0.25)
   }
-  
+
   return(proportions)
 }
 
 add_prediction_to_data <- function(data, final_fit) {
-  
-  model_type <- final_fit |> 
-    hardhat::extract_fit_parsnip() |> 
-    class() |> 
+  model_type <- final_fit |>
+    hardhat::extract_fit_parsnip() |>
+    class() |>
     head(1)
-  
+
   if (grepl("glm", model_type)) {
-    lambda_penalty <- final_fit |> 
-      hardhat::extract_fit_parsnip() |> 
+    lambda_penalty <- final_fit |>
+      hardhat::extract_fit_parsnip() |>
       pluck("spec", "args", "penalty")
-    
-    data <- final_fit |> 
-      workflowsets::extract_workflow() |> 
+
+    data <- final_fit |>
+      workflowsets::extract_workflow() |>
       augment(
         new_data = data,
         penalty = lambda_penalty
       )
   } else if (grepl("random", model_type)) {
-    data <- final_fit |> 
-      workflowsets::extract_workflow() |> 
+    data <- final_fit |>
+      workflowsets::extract_workflow() |>
       augment(data)
   }
-  
+
   return(data)
 }
 
 metric_to_numerator <- function(metric_name) {
-  numerator_description <- read.csv("data/configuration-table.csv") |> 
+  numerator_description <- read.csv("data/configuration-table.csv") |>
     filter(
       metric == metric_name
-    ) |> 
+    ) |>
     pull(numerator_description)
-  
-  if (length(numerator_description) == 0) numerator_description <- NA_character_
-  
+
+  if (length(numerator_description) == 0) {
+    numerator_description <- NA_character_
+  }
+
   return(numerator_description)
 }
 
-identify_missing_vars <- function(data_train, data_validation, data_test, model_type) {
-  
+identify_missing_vars <- function(
+  data_train,
+  data_validation,
+  data_test,
+  model_type
+) {
   data <- bind_rows(
-    data_train, 
+    data_train,
     data_validation,
     data_test
   )
-  
+
   # identify variables in train and val that are over 40% missing, so they are
   # subsequently removed
   mostly_missing_vars <- bind_rows(
     data_train,
     data_validation
-  ) |> 
+  ) |>
     lapply(
       function(x) sum(is.na(x)) / length(x)
-    ) |> 
-    (\(x) x[x > 0.4])() |> 
+    ) |>
+    (\(x) x[x > 0.4])() |>
     names(x = _)
-  
+
   # mostly zero vars should be covid variables when modelling pre-pandemic
   mostly_zero_vars <- bind_rows(
     data_train,
     data_validation
-  ) |> 
+  ) |>
     select(
       !any_of("total_cases")
-    ) |> 
+    ) |>
     lapply(
       function(x) sum(x == 0, na.rm = TRUE) / length(x)
-    ) |> 
-    (\(x) x[x > 0.95])() |> 
+    ) |>
+    (\(x) x[x > 0.95])() |>
     names(x = _)
-  
+
   # identify variables that are (almost) entirely missing from any of the
   # datasets
-  
+
   entirely_missing_vars <- list(
     data_train,
     data_validation,
     data_test
-  ) |> 
+  ) |>
     lapply(
       function(x) names(x)[(colSums(is.na(x)) / nrow(x)) > 0.95]
-    ) |> 
-    unlist() |> 
+    ) |>
+    unlist() |>
     unique()
-  
+
   # add the entirely missing vars to the mostly missing vars
   vars_to_remove <- unique(
-    c(mostly_missing_vars, mostly_zero_vars, entirely_missing_vars, "org", "nhs_region")
+    c(
+      mostly_missing_vars,
+      mostly_zero_vars,
+      entirely_missing_vars,
+      "org",
+      "nhs_region"
+    )
   )
-  
+
   # if (model_type == "random_forest") {
-    vars_to_remove <- c(vars_to_remove, "year", "quarter", "month")
+  vars_to_remove <- c(vars_to_remove, "year", "quarter", "month")
   # }
-  
+
   # identify fields to impute
-  missing_data <- names(data)[colSums(is.na(data)) > 0] |> 
+  missing_data <- names(data)[colSums(is.na(data)) > 0] |>
     (\(x) x[!(x %in% vars_to_remove)])()
-  
+
   vars <- list(
     vars_to_remove = vars_to_remove,
     vars_to_impute = missing_data
@@ -145,12 +158,12 @@ create_lag_variables <- function(data, lagged_years, lag_variables) {
   map_lag <- set_names(
     seq_len(lagged_years),
     nm = paste("lag", seq_len(lagged_years), sep = "_")
-  ) |> 
+  ) |>
     map(
       ~ purrr::partial(lag, n = .x)
     )
-  
-  data <- data |> 
+
+  data <- data |>
     arrange(
       across(
         any_of(
@@ -158,8 +171,8 @@ create_lag_variables <- function(data, lagged_years, lag_variables) {
         )
       )
     ) |>
-    group_by(org) |> 
-    group_split() |> 
+    group_by(org) |>
+    group_split() |>
     purrr::map_df(
       ~ mutate(
         .x,
@@ -170,7 +183,7 @@ create_lag_variables <- function(data, lagged_years, lag_variables) {
         )
       )
     )
-  
+
   return(data)
 }
 
@@ -185,17 +198,17 @@ include_numerator_remainder <- function(model_method) {
 # plotting functions ------------------------------------------------------
 
 plot_observed_expected <- function(data, target_variable, distinguish_year) {
-  p <- data |> 
+  p <- data |>
     mutate(
       data = factor(
         data,
         levels = c("train", "validation", "test"),
         labels = c("Train", "Validation", "Test")
       )
-    ) |> 
+    ) |>
     ggplot(
-      aes(x = .data[[target_variable]], 
-          y = .pred)) + 
+      aes(x = .data[[target_variable]], y = .pred)
+    ) +
     # Create a diagonal line:
     geom_abline(lty = 2) +
     geom_point(
@@ -205,7 +218,7 @@ plot_observed_expected <- function(data, target_variable, distinguish_year) {
         fill = data
       )
     )
-  
+
   if (distinguish_year == TRUE) {
     p <- p +
       geom_point(
@@ -214,13 +227,14 @@ plot_observed_expected <- function(data, target_variable, distinguish_year) {
         fill = NA,
         colour = "black"
       )
-  } 
-  
-  p <- p + 
+  }
+
+  p <- p +
     labs(
       y = stringr::str_wrap(
         paste("Predicted", tolower(target_variable)),
-        60),
+        60
+      ),
       x = stringr::str_wrap(target_variable, 60)
     ) +
     # Scale and size the x- and y-axis uniformly:
@@ -240,60 +254,64 @@ plot_observed_expected <- function(data, target_variable, distinguish_year) {
       facets = vars(data),
       ncol = 3
     )
-  
-  
+
   return(p)
 }
 
-plot_modelling_performance <- function(modelling_results, inputs, val_type, 
-                                       evaluation_metric, chart_subtitle, 
-                                       figure_caption, show_validation_variance, model_type) {
-  
-  table <- modelling_results[[nrow(inputs)]]$inputs |> 
-    select(!c("Training years", "Lagged years")) |> 
+plot_modelling_performance <- function(
+  modelling_results,
+  inputs,
+  val_type,
+  evaluation_metric,
+  chart_subtitle,
+  figure_caption,
+  show_validation_variance,
+  model_type
+) {
+  table <- modelling_results[[nrow(inputs)]]$inputs |>
+    select(!c("Training years", "Lagged years")) |>
     mutate(
       `Validation method` = val_type
     )
-  
+
   table_annotation <- ggplot(table) +
     ggplot2::annotation_custom(
-      tableGrob(table, rows = NULL, 
-                theme = ttheme_default(base_size = 5)),
-      xmin = 0, 
-      xmax = 1, 
-      ymin = -0, 
+      tableGrob(table, rows = NULL, theme = ttheme_default(base_size = 5)),
+      xmin = 0,
+      xmax = 1,
+      ymin = -0,
       ymax = 1
     ) +
     theme(
       rect = element_blank()
     )
-  
-  modelling_plot <- modelling_results |> 
+
+  modelling_plot <- modelling_results |>
     map_df(
       ~ pluck(.x, "evaluation_metrics"),
       .id = "input_id"
-    ) |> 
+    ) |>
     mutate(
       input_id = as.integer(input_id)
-    ) |> 
+    ) |>
     filter(
       .metric == evaluation_metric
-    ) |> 
+    ) |>
     left_join(
       inputs,
       by = join_by(input_id)
-    ) |> 
+    ) |>
     mutate(
       lagged_years = paste(
         lagged_years,
         "lagged years"
       )
-    ) |> 
+    ) |>
     pivot_longer(
       cols = c(train, validation, test),
       names_to = "data_type",
       values_to = evaluation_metric
-    ) |> 
+    ) |>
     ggplot(
       aes(
         x = training_years,
@@ -352,33 +370,34 @@ plot_modelling_performance <- function(modelling_results, inputs, val_type,
       legend.text = element_text(size = 7),
       legend.title = element_text(size = 7)
     )
-  
+
   if (show_validation_variance) {
-    validation_data <- modelling_results |> 
+    validation_data <- modelling_results |>
       map_df(
         ~ pluck(.x, "errors_per_fold"),
         .id = "input_id"
-      ) |> 
+      ) |>
       mutate(
         input_id = as.integer(input_id)
-      ) |> 
+      ) |>
       filter(
         .metric == evaluation_metric
-      ) |> 
+      ) |>
       left_join(
         inputs,
         by = join_by(input_id)
-      ) |> 
+      ) |>
       mutate(
         lagged_years = paste(
-          lagged_years, "lagged years"
+          lagged_years,
+          "lagged years"
         )
-      ) |> 
+      ) |>
       pivot_wider(
         names_from = .metric,
         values_from = .estimate
       )
-    
+
     modelling_plot <- modelling_plot +
       geom_point(
         data = validation_data,
@@ -395,121 +414,124 @@ plot_modelling_performance <- function(modelling_results, inputs, val_type,
         labels = c(
           standard = "Error on validation\nset folds"
         )
-      ) + 
+      ) +
       guides(
         color = guide_legend(order = 1),
         shape = guide_legend(order = 2)
       )
-    
   }
-  
-  p <- modelling_plot / table_annotation + 
+
+  p <- modelling_plot /
+    table_annotation +
     plot_layout(
       heights = c(6, 1)
     )
-  
+
   return(p)
 }
 
-plot_variable_importance <- function(model_last_fit, top_n = NULL, 
-                                     table_output = FALSE, method = "default", 
-                                     test_set = NULL, target_variable = NULL,
-                                     evaluation_metric = NULL, predictors = NULL) {
-  
+plot_variable_importance <- function(
+  model_last_fit,
+  top_n = NULL,
+  table_output = FALSE,
+  method = "default",
+  test_set = NULL,
+  target_variable = NULL,
+  evaluation_metric = NULL,
+  predictors = NULL
+) {
   method <- match.arg(
     method,
     c("default", "permute")
   )
-  
-  model_type <- model_last_fit |> 
-    extract_fit_engine() |> 
-    class() |> 
+
+  model_type <- model_last_fit |>
+    extract_fit_engine() |>
+    class() |>
     head(1)
-  
+
   if (grepl("random", model_type, ignore.case = TRUE)) {
     model_type <- "random_forest"
   } else if (grepl("glm", model_type, ignore.case = TRUE)) {
     model_type <- "logistic_regression"
   }
-  
+
   if (method == "default") {
-    
     if (model_type == "random_forest") {
-      table <- model_last_fit |> 
-        extract_fit_parsnip() |> 
+      table <- model_last_fit |>
+        extract_fit_parsnip() |>
         vi()
     } else if (model_type == "logistic_regression") {
-      lambda_penalty <- model_last_fit |> 
-        extract_fit_parsnip() |> 
+      lambda_penalty <- model_last_fit |>
+        extract_fit_parsnip() |>
         pluck("spec", "args", "penalty")
-      
-      table <- model_last_fit |> 
-        extract_fit_parsnip() |> 
+
+      table <- model_last_fit |>
+        extract_fit_parsnip() |>
         vi(
           lambda = lambda_penalty
-        ) |> 
+        ) |>
         mutate(
-          Sign = factor(Sign,
-                        levels = c("POS", "NEG"))
+          Sign = factor(Sign, levels = c("POS", "NEG"))
         )
     } else {
       stop("unknown model type")
     }
   } else if (method == "permute") {
-    
     pfun_reg <- function(object, newdata) {
-      
-      model_type <- object |> 
-        extract_fit_parsnip() |> 
-        class() |> 
+      model_type <- object |>
+        extract_fit_parsnip() |>
+        class() |>
         head(1)
-      
+
       if (grepl("glm", model_type)) {
-        lambda_penalty <- object |> 
+        lambda_penalty <- object |>
           pluck("spec", "args", "penalty")
-        
-        pred_table <- predict(object, new_data = newdata, penalty = lambda_penalty)
+
+        pred_table <- predict(
+          object,
+          new_data = newdata,
+          penalty = lambda_penalty
+        )
       } else if (grepl("random", model_type)) {
         pred_table <- predict(object, new_data = newdata)
       }
-      
-      preds <- pred_table |> 
+
+      preds <- pred_table |>
         pull(.pred)
       return(preds)
     }
     print("calculating permutation importance...")
     table <- vip::vi(
-      model_last_fit |> 
+      model_last_fit |>
         extract_workflow(),
       method = method,
       train = test_set,
       target = target_variable,
-      metric = evaluation_metric,  
+      metric = evaluation_metric,
       pred_wrapper = pfun_reg,
       # parallel = TRUE,
-      nsim = 10  # use 10 repetitions
+      nsim = 10 # use 10 repetitions
     )
   }
-  
-  
-  table <- table |> 
+
+  table <- table |>
     filter(
       Importance != 0
     )
-  
+
   if (!is.null(top_n)) {
-    table <- table |> 
+    table <- table |>
       head(top_n)
   }
-  
+
   p <- table |>
     arrange(
       Importance
-    ) |> 
+    ) |>
     mutate(
-      Variable = factor(Variable,
-                        levels = Variable)
-    ) |> 
+      Variable = factor(Variable, levels = Variable)
+    ) |>
     ggplot(
       aes(
         x = Importance,
@@ -517,7 +539,7 @@ plot_variable_importance <- function(model_last_fit, top_n = NULL,
       )
     ) +
     theme_minimal()
-  
+
   if (model_type == "logistic_regression") {
     p <- p +
       geom_col(
@@ -538,10 +560,9 @@ plot_variable_importance <- function(model_last_fit, top_n = NULL,
       )
   } else if (model_type == "random_forest") {
     p <- p +
-      geom_col() 
+      geom_col()
   }
-  
-  
+
   if (table_output) {
     return(table)
   } else {
@@ -550,92 +571,100 @@ plot_variable_importance <- function(model_last_fit, top_n = NULL,
 }
 
 #load data --------------------------------------------------------------- '
-#' @param binary_covid logical; whether to remove all calculated COVID fields 
+#' @param binary_covid logical; whether to remove all calculated COVID fields
 #' and include one that is 1 for years from 2020 onwards, and 0 prior to that
-load_data <- function(target_variable, value_type = "value", incl_numerator_remainder = FALSE,
-                      broad_age_bands = TRUE, binary_covid = TRUE) {
-  
+load_data <- function(
+  target_variable,
+  value_type = "value",
+  incl_numerator_remainder = FALSE,
+  broad_age_bands = TRUE,
+  binary_covid = TRUE
+) {
   metrics <- read.csv(
     here::here("data/configuration-table.csv"),
     encoding = "latin1"
   )
-  
-  dc_data <- list.files(here::here("data"), full.names = TRUE) |> 
-    (\(x) x[!grepl("configuration-table", x)])() |> 
+
+  dc_data <- list.files(here::here("data"), full.names = TRUE) |>
+    (\(x) x[!grepl("configuration-table|gp-reg-pat-prac-quin-age", x)])() |>
     purrr::map_dfr(
       read.csv
     )
-  
+
   missing_metrics <- setdiff(
     unique(dc_data$metric),
     unique(metrics$metric)
   )
-  
+
   if (length(missing_metrics) > 0) {
-    stop("there are some metrics in dc_data that are not in the configuration table")
+    stop(
+      "there are some metrics in dc_data that are not in the configuration table"
+    )
   }
-  
-  metrics <- metrics |> 
+
+  metrics <- metrics |>
     filter(
       grepl("include", status) |
         metric == target_variable
-    ) |> 
+    ) |>
     select(metric, denominator_description)
-  
-  
+
   # ensure full year of data for target variable
-  target_data <- dc_data |> 
+  target_data <- dc_data |>
     filter(
       metric == target_variable
     )
-  
+
   if (sum(!is.na(target_data[["month"]])) > 0) {
-  # if monthly data are recorded, retain years where 12 months exist in that year
-    full_years <- target_data |> 
-      filter(!is.na(month)) |> 
+    # if monthly data are recorded, retain years where 12 months exist in that year
+    full_years <- target_data |>
+      filter(!is.na(month)) |>
       distinct(
-        year, month
-      ) |> 
-      count(year) |> 
-      filter(n == 12) |> 
+        year,
+        month
+      ) |>
+      count(year) |>
+      filter(n == 12) |>
       pull(year)
-    
-    dc_data <- dc_data |> 
+
+    dc_data <- dc_data |>
       filter(year %in% full_years)
   } else if (sum(!is.na(target_data[["quarter"]])) > 0) {
     # if quarterly data recorded, retain only years with 4 quarters
-    full_years <- target_data |> 
-      filter(!is.na(quarter)) |> 
+    full_years <- target_data |>
+      filter(!is.na(quarter)) |>
       distinct(
-        year, quarter
-      ) |> 
-      count(year) |> 
-      filter(n == 4) |> 
+        year,
+        quarter
+      ) |>
+      count(year) |>
+      filter(n == 4) |>
       pull(year)
-    
-    dc_data <- dc_data |> 
+
+    dc_data <- dc_data |>
       filter(year %in% full_years)
   }
-  
-  dc_data <- dc_data |> 
+
+  dc_data <- dc_data |>
     inner_join(
       metrics,
       by = join_by(metric)
-    ) |> 
+    ) |>
     filter(
       grepl("annual", frequency),
       grepl("^Q", org)
     )
-  
+
   if (broad_age_bands == TRUE) {
-    age_band_data <- dc_data |> 
+    age_band_data <- dc_data |>
       filter(
         grepl("age band", metric)
-      ) |> 
+      ) |>
       mutate(
         metric = str_replace_all(
           metric,
-          c("0-9" = "0-29",
+          c(
+            "0-9" = "0-29",
             "10-19" = "0-29",
             "20-29" = "0-29",
             "30-39" = "30-59",
@@ -645,66 +674,72 @@ load_data <- function(target_variable, value_type = "value", incl_numerator_rema
             "70-79" = "60+",
             "80-89" = "60+",
             "80\\+" = "60+",
-            "90\\+" = "60+")
+            "90\\+" = "60+"
+          )
         )
-      ) |> 
+      ) |>
       summarise(
         numerator = sum(numerator),
         denominator = mean(denominator),
         .by = any_of(
           c(
-            "year", "quarter", "month", "org", "frequency", "metric"
+            "year",
+            "quarter",
+            "month",
+            "org",
+            "frequency",
+            "metric"
           )
         )
-      ) |> 
+      ) |>
       mutate(
         value = (numerator / denominator) * 100
       )
-    
-    dc_data <- dc_data |> 
+
+    dc_data <- dc_data |>
       filter(
         !grepl("age band", metric)
-      ) |> 
+      ) |>
       bind_rows(
         age_band_data
       )
   }
-  
+
   if (incl_numerator_remainder == TRUE) {
-    numerator_remainder <- dc_data |> 
+    numerator_remainder <- dc_data |>
       filter(
         metric == target_variable
-      ) |> 
+      ) |>
       mutate(
         remainder = denominator - numerator
-      ) |> 
-      select(!c("value", "metric", "denominator")) |> 
+      ) |>
+      select(!c("value", "metric", "denominator")) |>
       pivot_longer(
         cols = c("numerator", "remainder"),
         names_to = "metric",
         values_to = value_type
       )
-    
-    dc_data <- dc_data |> 
+
+    dc_data <- dc_data |>
       bind_rows(
         numerator_remainder
       )
   }
-  
+
   ics_lkp_path <- "data-raw/Lookups/ICB22CDH_NHSER22CDH.csv"
   if (!file.exists(here::here(ics_lkp_path))) {
-    ics_to_nhs_region <- "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/SICBL22_ICB22_NHSER22_EN_LU/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson" |> 
-      jsonlite::fromJSON() |> 
-      pluck("features", "properties") |> 
+    ics_to_nhs_region <- "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/SICBL22_ICB22_NHSER22_EN_LU/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson" |>
+      jsonlite::fromJSON() |>
+      pluck("features", "properties") |>
       distinct(
         ICB22CDH,
         NHSER22CDH
-      ) |> 
+      ) |>
       rename(
         org = "ICB22CDH",
         nhs_region = "NHSER22CDH"
       )
-    
+
     write.csv(
       ics_to_nhs_region,
       ics_lkp_path,
@@ -713,42 +748,43 @@ load_data <- function(target_variable, value_type = "value", incl_numerator_rema
   } else {
     ics_to_nhs_region <- read.csv(here::here(ics_lkp_path))
   }
-  
-  dc_data <- dc_data |> 
+
+  dc_data <- dc_data |>
     select(
       any_of(
         c(
           "metric",
-          "year", 
-          "quarter", 
+          "year",
+          "quarter",
           "month",
-          "org", 
+          "org",
           value_type
         )
       )
-    ) |> 
+    ) |>
     rename(
       value = all_of(value_type)
-    ) |> 
+    ) |>
     pivot_wider(
       names_from = metric,
       values_from = value
-    ) |> 
+    ) |>
     left_join(
       ics_to_nhs_region,
       by = join_by(
         org
       )
-    ) |> 
+    ) |>
     relocate(
-      nhs_region, .after = org
+      nhs_region,
+      .after = org
     )
-  
+
   if (binary_covid) {
-    dc_data <- dc_data |> 
+    dc_data <- dc_data |>
       select(
         !contains("COVID")
-      ) |> 
+      ) |>
       mutate(
         pandemic_onwards = case_when(
           year >= 2020 ~ 1L,
@@ -756,19 +792,24 @@ load_data <- function(target_variable, value_type = "value", incl_numerator_rema
         )
       )
   }
-  
+
   return(dc_data)
 }
 
 # modelling ---------------------------------------------------------------
 
-modelling_grid <- function(data, target_variable, predict_year, target_type, lag_target = 0:1) {
-  
+modelling_grid <- function(
+  data,
+  target_variable,
+  predict_year,
+  target_type,
+  lag_target = 0:1
+) {
   target_type <- match.arg(
     target_type,
     c("proportion", "difference from previous")
   )
-  min_max_years <- data |> 
+  min_max_years <- data |>
     select(
       all_of(
         c(
@@ -776,11 +817,11 @@ modelling_grid <- function(data, target_variable, predict_year, target_type, lag
           target_variable
         )
       )
-    ) |> 
+    ) |>
     summarise(
       min = min(year),
       max = max(year)
-    ) |> 
+    ) |>
     mutate(
       max = if_else(max > predict_year, predict_year, max),
       max_years_incl_lag = (max - min),
@@ -791,30 +832,30 @@ modelling_grid <- function(data, target_variable, predict_year, target_type, lag
       ),
       max_years = if_else(max_years_incl_lag > 6, 6, max_years_incl_lag)
     )
-  
+
   input_grid <- tibble(
     training_years = 2:min_max_years[["max_years"]]
-    ) |> 
+  ) |>
     cross_join(
       tibble(
-        lagged_years = 0:2  
+        lagged_years = 0:2
       )
-    ) |> 
+    ) |>
     cross_join(
       tibble(
         lag_target = lag_target
       )
-    ) |> 
+    ) |>
     filter(
       training_years + lagged_years <= min_max_years[["max_years_incl_lag"]],
       training_years + lag_target <= min_max_years[["max_years_incl_lag"]]
-    ) |> 
+    ) |>
     arrange(
       training_years,
       lagged_years,
       lag_target
     )
-  
+
   return(input_grid)
 }
 
@@ -860,43 +901,46 @@ modelling_grid <- function(data, target_variable, predict_year, target_type, lag
 #'   in the outputs
 #' @details This webpage was useful
 #'   https://www.tidyverse.org/blog/2022/05/case-weights/
-#' 
-modelling_performance <- function(data, target_variable, lagged_years = 0, 
-                                  keep_current = TRUE, lag_target = 0,
-                                  time_series_split = TRUE, training_years = NULL,
-                                  remove_years = NULL,
-                                  shuffle_training_records = FALSE,
-                                  model_type = "logistic_regression", 
-                                  tuning_grid = "auto",
-                                  target_type = "proportion",
-                                  validation_type,
-                                  eval_metric,
-                                  include_pi = FALSE,
-                                  auto_feature_selection = FALSE,
-                                  seed = 321) {
-  
+#'
+modelling_performance <- function(
+  data,
+  target_variable,
+  lagged_years = 0,
+  keep_current = TRUE,
+  lag_target = 0,
+  time_series_split = TRUE,
+  training_years = NULL,
+  remove_years = NULL,
+  shuffle_training_records = FALSE,
+  model_type = "logistic_regression",
+  tuning_grid = "auto",
+  target_type = "proportion",
+  validation_type,
+  eval_metric,
+  include_pi = FALSE,
+  auto_feature_selection = FALSE,
+  seed = 321
+) {
   model_type <- match.arg(
     model_type,
     c("random_forest", "logistic_regression")
   )
-  
+
   target_type <- match.arg(
     target_type,
-    c("proportion", 
-      "difference from previous",
-      "absolute")
+    c("proportion", "difference from previous", "absolute")
   )
-  
+
   validation_type <- match.arg(
     validation_type,
     c("train_validation", "leave_group_out_validation", "cross_validation")
   )
-  
+
   eval_metric <- match.arg(
     eval_metric,
     c("rmse", "mae", "mape", "smape")
   )
-  
+
   if (model_type == "random_forest") {
     if (class(tuning_grid) == "data.frame") {
       if (!all(names(tuning_grid) %in% c("mtry", "min_n", "trees"))) {
@@ -906,16 +950,21 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       stop("tuning_grid is incorrect")
     }
   } else if (model_type == "logistic_regression") {
-    if (target_type == "diference from previous") 
-      stop("logistic regression model cannot be used for a target of 'difference from previous'")
+    if (target_type == "diference from previous") {
+      stop(
+        "logistic regression model cannot be used for a target of 'difference from previous'"
+      )
+    }
   }
-  
+
   if (!is.null(training_years)) {
-    if (training_years < 2) stop("training years must be NULL or greater than 1")
+    if (training_years < 2) {
+      stop("training years must be NULL or greater than 1")
+    }
   }
-  
+
   set.seed(seed)
-  
+
   print(
     paste0(
       training_years,
@@ -925,36 +974,37 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       Sys.time()
     )
   )
-  
+
   # create case weights field for logistic regression
-  if (model_type == "logistic_regression" &
+  if (
+    model_type == "logistic_regression" &
       all(c("numerator", "remainder") %in% names(data))
-      ) {
-    
-    data <- data |> 
+  ) {
+    data <- data |>
       mutate(
         across(
           c(numerator, remainder),
           ~ as.integer(
             round(
-              .x, 0
+              .x,
+              0
             )
           )
         ),
         total_cases = frequency_weights(numerator + remainder)
-      ) |> 
+      ) |>
       select(!c("numerator", "remainder"))
   }
-  
+
   if (target_type == "difference from previous") {
     # make copy of data before any manipulation in order to calculate future
     # evaluation metrics
-    original_data <- data |> 
+    original_data <- data |>
       select(
         all_of(
           c("year", "org", target_variable)
         )
-      ) |> 
+      ) |>
       mutate(
         # add a year to the year column so when joining to the dataset for
         # evaluating change from last year, last year's data is joined with this
@@ -962,23 +1012,30 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
         last_year = year + 1
       )
 
-    data <- data |> 
-      arrange(org, year) |> 
+    data <- data |>
+      arrange(org, year) |>
       mutate(
         across(
-          !any_of(c("year", "quarter", "month", "org", "nhs_region", "pandemic_onwards")),
+          !any_of(c(
+            "year",
+            "quarter",
+            "month",
+            "org",
+            "nhs_region",
+            "pandemic_onwards"
+          )),
           function(x) x - lag(x)
         ),
         .by = c(
           org
         )
-      ) |> 
+      ) |>
       filter(
         # remove all the rows that will have NAs
         year != min(year)
       )
   }
-  
+
   if (lag_target > 0) {
     data <- create_lag_variables(
       data = data,
@@ -986,17 +1043,26 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       lag_variables = target_variable
     )
   }
-  
+
   if (lagged_years > 0) {
     # create lag variables
-    
-    not_lag_variables <- c("year", "quarter", "month", "org", "nhs_region", 
-                           "pandemic_onwards", target_variable)
-    
-    extra_not_lag_vars <- names(data)[grepl("covid|^lag", 
-                                            names(data), 
-                                            ignore.case = TRUE)]
-    
+
+    not_lag_variables <- c(
+      "year",
+      "quarter",
+      "month",
+      "org",
+      "nhs_region",
+      "pandemic_onwards",
+      target_variable
+    )
+
+    extra_not_lag_vars <- names(data)[grepl(
+      "covid|^lag",
+      names(data),
+      ignore.case = TRUE
+    )]
+
     not_lag_variables <- c(
       not_lag_variables,
       extra_not_lag_vars
@@ -1005,27 +1071,33 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     if (model_type == "logistic_regression") {
       not_lag_variables <- c(not_lag_variables, "total_cases")
     }
-    
+
     lag_variables <- setdiff(
       names(data),
       not_lag_variables
     )
-    
+
     data <- create_lag_variables(
       data = data,
       lagged_years = lagged_years,
       lag_variables = lag_variables
     )
-    
+
     if (time_series_split) {
       if (!keep_current) {
-        keep_variables <- c("year", "quarter", "month", "org", 
-                            "nhs_region", target_variable)
-        
+        keep_variables <- c(
+          "year",
+          "quarter",
+          "month",
+          "org",
+          "nhs_region",
+          target_variable
+        )
+
         if (model_type == "logistic_regression") {
           keep_variables <- c(keep_variables, "total_cases")
         }
-        
+
         data <- data |>
           select(
             any_of(keep_variables),
@@ -1034,19 +1106,19 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
           filter(
             year != min(year)
           )
-      } 
+      }
     }
   }
-  
+
   if (!is.null(remove_years)) {
-    data <- data |> 
+    data <- data |>
       filter(
         !(year %in% remove_years)
       )
-    
+
     if (!is.null(training_years)) {
       overlapping_years <- intersect(
-        remove_years, 
+        remove_years,
         seq(
           from = max(data[["year"]]) - training_years,
           to = max(data[["year"]]) - 1
@@ -1055,70 +1127,67 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       training_years <- training_years + length(overlapping_years)
     }
   }
-  
+
   # limit the years used for training purposes
   if (!is.null(training_years)) {
-    
-    data <- data |> 
+    data <- data |>
       filter(
         year >= (max(year) - training_years)
       )
   }
-  
+
   # splitting
-  
-  
-  
+
   # split dataset into train, validation and test
   if (time_series_split) {
-    data <- data |> 
+    data <- data |>
       arrange(
-        year, org
+        year,
+        org
       )
     proportions <- train_validation_proportions(
       data,
       shuffle_training_records = shuffle_training_records
     )
-    
+
     if (shuffle_training_records) {
-      final_year <- data |> 
+      final_year <- data |>
         filter(year == max(year))
-      
-      data <- data |> 
-        filter(year != max(year)) |> 
-        slice_sample(prop = 1) |> 
+
+      data <- data |>
+        filter(year != max(year)) |>
+        slice_sample(prop = 1) |>
         bind_rows(final_year)
-        
     }
-    
+
     splits <- rsample::initial_validation_time_split(
       data = data,
       prop = proportions
     )
-    
   } else {
-    data <- data |> 
+    data <- data |>
       arrange(
-        org, year
+        org,
+        year
       )
     # 60% train, 20% val, 20% test
     proportions <- c(0.6, 0.2)
     splits <- rsample::initial_validation_split(
       data = data,
       prop = proportions
-    ) 
+    )
   }
-  
+
   data_train <- rsample::training(splits)
   data_validation <- rsample::validation(splits)
   data_test <- rsample::testing(splits)
-  
+
   # check what the year ranges are for each training set
   dataset_yrs <- lapply(
     list(data_train, data_validation, data_test),
     function(x) range(x$year)
   )
-  
+
   # create train and validation set for tuning hyperparameters
   if (validation_type == "cross_validation") {
     validation_set <- vfold_cv(
@@ -1128,7 +1197,7 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       ),
       v = 4,
       strata = all_of(target_variable)
-    )  
+    )
   } else if (validation_type == "train_validation") {
     validation_set <- validation_set(splits)
   } else if (validation_type == "leave_group_out_validation") {
@@ -1136,14 +1205,11 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       bind_rows(
         data_train,
         data_validation
-      ), 
+      ),
       group = nhs_region
     )
   }
-  
-  
-  
-  
+
   # identify variables in train and val that are over 40% missing, so they are
   # subsequently removed
   vars_selection <- identify_missing_vars(
@@ -1152,104 +1218,110 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     data_test = data_test,
     model_type = model_type
   )
-  
+
   # identify predictor variables
-  predictor_variables <- names(data)[!(names(data) %in% c(
-    "year", "quarter", "month",
-    target_variable, "total_cases"))] |> 
+  predictor_variables <- names(data)[
+    !(names(data) %in%
+      c(
+        "year",
+        "quarter",
+        "month",
+        target_variable,
+        "total_cases"
+      ))
+  ] |>
     # remove variables that are mostly/entirely missing
     (\(x) x[!(x %in% vars_selection[["vars_to_remove"]])])()
-  
-  model_recipe <- data_train |> 
-    recipe() |> 
+
+  model_recipe <- data_train |>
+    recipe() |>
     step_rm(
       any_of(vars_selection[["vars_to_remove"]])
-    ) |> 
+    ) |>
     update_role(
       all_of(target_variable),
       new_role = "outcome"
     )
-  
+
   if (model_type %in% c("random_forest")) {
-    model_recipe <- model_recipe |> 
+    model_recipe <- model_recipe |>
       step_rm(
         any_of(
           c("numerator", "remainder")
         )
       )
   }
-  
-  model_recipe <- model_recipe |> 
+
+  model_recipe <- model_recipe |>
     update_role(
       all_of(predictor_variables),
       new_role = "predictor"
     )
-  
-  model_recipe <- model_recipe |> 
+
+  model_recipe <- model_recipe |>
     step_impute_knn(
       all_of(vars_selection[["vars_to_impute"]])
     )
-  
+
   if (model_type %in% c("logistic_regression")) {
     model_recipe <- model_recipe |>
       step_zv(
         all_numeric_predictors()
-      ) |> 
+      ) |>
       step_normalize(
         all_numeric_predictors()
       )
   }
-  
+
   # how many cores on the machine so we can parallelise
   cores <- parallel::detectCores()
-  
+
   # set model
   if (model_type == "random_forest") {
-    
     # set model
     model_setup <- rand_forest(
-      mtry = tune(), 
-      min_n = tune(), 
+      mtry = tune(),
+      min_n = tune(),
       trees = tune()
-    ) |> 
+    ) |>
       set_engine(
-        "randomForest", 
+        "randomForest",
         num.threads = !!cores
-      ) |> 
+      ) |>
       set_mode("regression")
   } else if (model_type == "logistic_regression") {
     path_length <- 300
-    pen_vals <- 10 ^ seq(-4, 0, length.out = path_length)
-    
+    pen_vals <- 10^seq(-4, 0, length.out = path_length)
+
     if (lag_target > 0) {
       penalise_lag_target <- ifelse(
         grepl(
-          target_variable, 
+          target_variable,
           predictor_variables
-        ), 
+        ),
         1, # eg, allow maximum penalisation for the lagged version of the target variable
         1 # option to reduce penalisation for the remaining predictors
       )
     } else {
       penalise_lag_target <- rep(1, length(predictor_variables))
     }
-    
+
     model_setup <- parsnip::linear_reg(
       penalty = tune(),
       mixture = tune()
-    ) |> 
+    ) |>
       set_engine(
-        "glmnet", 
-        family = stats::quasibinomial(link = "logit"), 
+        "glmnet",
+        family = stats::quasibinomial(link = "logit"),
         # path_values = pen_vals,
         nlambda = 150,
         num.threads = !!cores,
         standardize = FALSE,
         penalty.factor = penalise_lag_target
-      ) |> 
+      ) |>
       set_mode("regression")
   }
-  
+
   if (isTRUE(auto_feature_selection)) {
     browser()
     cat("...feature elimination....")
@@ -1257,14 +1329,14 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     cat("...counting baked cols....")
     baked_cols <- model_recipe |>
       prep()
-    
+
     predictors <- baked_cols |>
       summary() |>
       filter(role == "predictor") |>
       pull(variable)
-    
+
     baked_cols <- length(predictors)
-    
+
     # tm <- log_the_time(tm)
     cat("...rfeControl stage....")
     ctrl <- caret::rfeControl(
@@ -1289,7 +1361,7 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     #   type = 'PSOCK'
     # )
     # doParallel::registerDoParallel(cl)
-    
+
     # debugonce(rfe)
     # tm <- log_the_time(tm)
     cat("...feature elimination stage....")
@@ -1305,13 +1377,13 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
       rfeControl = ctrl,
       metric = "Accuracy"
     )
-    
+
     # lr_with_filter <- caret::sbf(
     #   recipe,
     #   data = training(splits),
     #   sbfControl = ctrl
     # )
-    
+
     # tm <- log_the_time(tm)
     cat("...updating the recipe....")
     model_recipe <- model_recipe |>
@@ -1323,22 +1395,22 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
         new_role = "recursive feature elimination"
       )
   }
-  
+
   # start workflow
-  modelling_workflow <- workflow() |> 
-    add_model(model_setup) |> 
+  modelling_workflow <- workflow() |>
+    add_model(model_setup) |>
     add_recipe(model_recipe)
   # browser()
-  
+
   # if logistic regression add case weights to workflow
   if (model_type == "logistic_regression") {
-    modelling_workflow <- modelling_workflow |> 
+    modelling_workflow <- modelling_workflow |>
       add_case_weights(total_cases)
   }
-  
+
   if (model_type == "random_forest") {
     # design the tuning of the hyperparameters
-    
+
     if (class(tuning_grid) == "data.frame") {
       tuning_grid <- tuning_grid
     } else {
@@ -1357,23 +1429,25 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
           from = ceiling((length(predictor_variables) / 5) / 10) * 10,
           to = (ceiling((length(predictor_variables) / 5) / 10) * 10) + 100,
           by = 10
-        ) * 10
+        ) *
+          10
       )
       tuning_grid <- 30
     }
-    
+
     extract_input <- NULL
   } else if (model_type == "logistic_regression") {
     tuning_grid <- crossing(
-      penalty = pen_vals[seq_len(path_length) %% 10 == 0], 
+      penalty = pen_vals[seq_len(path_length) %% 10 == 0],
       mixture = seq(
         from = 0,
         to = 1.0,
         length.out = 10
-      ))
-    
+      )
+    )
+
     tuning_grid <- 60
-    
+
     # # obtain resample coefficients function
     # get_glmnet_coefs <- function(x) {
     #   x %>%
@@ -1384,16 +1458,16 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
 
     # extract_input <- get_glmnet_coefs
   }
- # tuning_grid <- 2
-  
+  # tuning_grid <- 2
+
   evaluation_metrics <- metric_set(
     yardstick::rmse,
     yardstick::mae,
     yardstick::mape,
     yardstick::smape
   )
-  
-  residuals <- modelling_workflow |> 
+
+  residuals <- modelling_workflow |>
     tune_grid(
       resamples = validation_set,
       grid = tuning_grid,
@@ -1404,9 +1478,9 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
         parallel_over = "resamples"
       )
     )
-  
+
   # tuning_parameters <- autoplot(residuals)
-    
+
   # collate coefficients
   if (model_type == "logistic_regression") {
     # tuning_coefs <- residuals |>
@@ -1418,31 +1492,30 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     #     .by = c(mixture, id)
     #   ) |>   # │ Remove the redundant results
     #   unnest(.extracts)
-    
+
     joining_fields <- join_by(penalty, mixture, .config)
   } else if (model_type == "random_forest") {
     joining_fields <- join_by(mtry, min_n, trees, .config)
   }
-  
+
   # select the best parameters
-  best <- residuals |> 
+  best <- residuals |>
     select_best(metric = eval_metric)
-  
+
   # create metrics for each fold for best performing model
   errors_per_fold <- collect_metrics(
     residuals,
     summarize = FALSE
-  ) |> 
+  ) |>
     inner_join(
       best,
       by = joining_fields
     )
-  
-  
+
   # the last workflow
   modelling_workflow_final <- modelling_workflow |>
     finalize_workflow(best)
-  
+
   # the last fit
   model_fit <- last_fit(
     modelling_workflow_final,
@@ -1450,164 +1523,163 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     add_validation_set = TRUE,
     metrics = evaluation_metrics
   )
-  
-  validation_metrics <- residuals |> 
+
+  validation_metrics <- residuals |>
     collect_metrics()
-  
+
   if (model_type == "random_forest") {
-    validation_metrics <- validation_metrics |> 
+    validation_metrics <- validation_metrics |>
       inner_join(
         best,
         by = joining_fields
       )
   } else if (model_type == "logistic_regression") {
-    validation_metrics <- validation_metrics |> 
+    validation_metrics <- validation_metrics |>
       inner_join(
         best,
         by = joining_fields
       )
   }
-  
+
   if (target_type == "proportion") {
-    validation_metrics <- validation_metrics |> 
+    validation_metrics <- validation_metrics |>
       select(
         ".metric",
         .estimate = "mean"
-      ) |> 
+      ) |>
       mutate(
         data = "validation"
       )
-    
-    test_metrics <- model_fit |> 
-      collect_metrics() |> 
+
+    test_metrics <- model_fit |>
+      collect_metrics() |>
       select(
         ".metric",
         ".estimate"
-      ) |> 
+      ) |>
       mutate(
         data = "test"
       )
-    
-    train_metrics <- model_fit |> 
-      extract_workflow() |> 
-      augment(data_train) |> 
+
+    train_metrics <- model_fit |>
+      extract_workflow() |>
+      augment(data_train) |>
       evaluation_metrics(
-        truth = all_of(target_variable), 
+        truth = all_of(target_variable),
         estimate = .pred
-      ) |> 
+      ) |>
       mutate(
-        data = "train",  
-      ) |> 
+        data = "train",
+      ) |>
       select(!c(".estimator"))
-    
+
     evaluation_metrics <- bind_rows(
       train_metrics,
       validation_metrics,
       test_metrics
     )
   } else if (target_type == "difference from previous") {
-    
     evaluation_metrics <- list(
       train = data_train,
       validation = data_validation,
       test = data_test
-    ) |> 
+    ) |>
       purrr::map(
         ~ augment(
           x = model_fit |> extract_workflow(),
           new_data = .x
         )
-      ) |> 
+      ) |>
       purrr::map(
         ~ change_from_previous_eval_metric(
           predicted_dataset = .x,
           original_data = original_data,
           eval_metric_set = evaluation_metrics
         )
-      ) |> 
+      ) |>
       purrr::list_rbind(
         names_to = "data"
-      ) |> 
+      ) |>
       select(!c(".estimator"))
   }
-  
+
   evaluation_metrics <- evaluation_metrics |>
     tidyr::pivot_wider(
       names_from = data,
       values_from = .estimate
     )
-  
+
   if (validation_type == "train_validation") {
-    validation_row_years <- data_validation |> 
+    validation_row_years <- data_validation |>
       mutate(
         .row = row_number()
-      ) |> 
+      ) |>
       select(
         ".row",
         "year"
       )
-    
-  } else if (validation_type %in% c("cross_validation", "leave_group_out_validation")) {
-    validation_row_years <- data_train |> 
-      bind_rows(data_validation) |> 
+  } else if (
+    validation_type %in% c("cross_validation", "leave_group_out_validation")
+  ) {
+    validation_row_years <- data_train |>
+      bind_rows(data_validation) |>
       mutate(
         .row = row_number()
-      ) |> 
+      ) |>
       select(
         ".row",
         "year"
       )
-    
   }
-  
-  validation_predictions <- residuals |> 
-    collect_predictions(parameters = best) |> 
+
+  validation_predictions <- residuals |>
+    collect_predictions(parameters = best) |>
     mutate(
       data = "validation"
-    ) |> 
+    ) |>
     left_join(
       validation_row_years,
       by = join_by(.row)
     )
-  
-  test_predictions <- model_fit %>% 
-    collect_predictions() |> 
+
+  test_predictions <- model_fit %>%
+    collect_predictions() |>
     mutate(
       data = "test"
-    ) |> 
+    ) |>
     bind_cols(
       tibble(
         year = data_test$year
       )
     )
-  
+
   train_predictions <- add_prediction_to_data(
     data = data_train,
     final_fit = model_fit
-  ) |> 
+  ) |>
     mutate(
       data = "train"
     )
-  
+
   dataset_predictions <- bind_rows(
     train_predictions,
     validation_predictions,
     test_predictions
   )
-    
-  prediction_plot <- dataset_predictions |> 
+
+  prediction_plot <- dataset_predictions |>
     plot_observed_expected(
       target_variable = target_variable,
       distinguish_year = TRUE
     )
-  
+
   if (include_pi == TRUE) {
-    permutation_importance <- model_fit |> 
+    permutation_importance <- model_fit |>
       plot_variable_importance(
         # top_n = 20,
-        table_output = TRUE, 
-        method = "permute", 
-        test_set = data_test, 
+        table_output = TRUE,
+        method = "permute",
+        test_set = data_test,
         target_variable = target_variable,
         evaluation_metric = eval_metric,
         predictors = predictor_variables
@@ -1615,18 +1687,21 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
   } else {
     permutation_importance <- NULL
   }
-  
-  
+
   inputs <- tibble(
     `Model type` = model_type,
     `Split type` = ifelse(time_series_split == TRUE, "Time-series", "Random"),
-    `Shuffled training years` = ifelse(time_series_split == TRUE, shuffle_training_records, NA),
+    `Shuffled training years` = ifelse(
+      time_series_split == TRUE,
+      shuffle_training_records,
+      NA
+    ),
     `Training years` = training_years,
     `Lagged years` = lagged_years,
     `Current year included` = ifelse(lagged_years > 0, keep_current, NA),
     `Lagged target variable` = paste(lag_target, "lagged years")
   )
-  
+
   output <- list(
     dataset_yrs = dataset_yrs,
     # tuning_parameters = tuning_parameters,
@@ -1637,102 +1712,117 @@ modelling_performance <- function(data, target_variable, lagged_years = 0,
     permutation_importance = permutation_importance,
     ft = model_fit
   )
-  
+
   return(output)
-  
 }
 
 #' function to calculate the evaluation metrics for the "change from previous"
 #' models
-change_from_previous_eval_metric <- function(predicted_dataset, original_data, eval_metric_set) {
-  metrics <- predicted_dataset |> 
+change_from_previous_eval_metric <- function(
+  predicted_dataset,
+  original_data,
+  eval_metric_set
+) {
+  metrics <- predicted_dataset |>
     select(
       all_of(
         c("year", "org", ".pred")
       )
-    ) |> 
+    ) |>
     left_join(
-      select(original_data,
-             all_of(c("last_year", "org", observed = target_variable))
+      select(
+        original_data,
+        all_of(c("last_year", "org", observed = target_variable))
       ),
       by = join_by(
         year == last_year,
         org
       )
-    ) |> 
+    ) |>
     mutate(
       .pred = .pred + observed
-    ) |> 
-    select(!c("observed")) |> 
+    ) |>
+    select(!c("observed")) |>
     left_join(
-      select(original_data,
-             all_of(c("year", "org", observed = target_variable))
+      select(
+        original_data,
+        all_of(c("year", "org", observed = target_variable))
       ),
       by = join_by(
         year,
         org
       )
-    ) |> 
+    ) |>
     eval_metric_set(
-      truth = observed, 
+      truth = observed,
       estimate = .pred
     )
-  
+
   return(metrics)
-  
 }
 
 # Modelling output functions ----------------------------------------------
-record_model_outputs <- function(model_outputs, eval_metric, 
-                                 validation_type, target_type) {
-  
-  inputs <- model_outputs |> 
-    pluck("ft") |> 
-    extract_recipe() |> 
+record_model_outputs <- function(
+  model_outputs,
+  eval_metric,
+  validation_type,
+  target_type
+) {
+  inputs <- model_outputs |>
+    pluck("ft") |>
+    extract_recipe() |>
     summary()
-  
-  target <- inputs |> 
+
+  target <- inputs |>
     filter(
       role == "outcome"
-    ) |> 
+    ) |>
     pull(variable)
-  
-  predictors <- inputs |> 
+
+  predictors <- inputs |>
     filter(
       role == "predictor"
-    ) |> 
+    ) |>
     pull(variable)
-  
-  important_predictors <- model_outputs |> 
-    pluck("ft") |> 
+
+  important_predictors <- model_outputs |>
+    pluck("ft") |>
     plot_variable_importance(
       top_n = 20,
-      table_output = TRUE, 
+      table_output = TRUE,
       method = "default"
     )
-  
-  pre_processing <- model_outputs |> 
-    pluck("ft") |> 
-    extract_recipe() |> 
-    tidy() |> 
+
+  pre_processing <- model_outputs |>
+    pluck("ft") |>
+    extract_recipe() |>
+    tidy() |>
     pull(type)
-  
+
   model_type <- pluck(model_outputs, "inputs", "Model type")
   split_method <- pluck(model_outputs, "inputs", "Split type")
-  shuffled_training_years <- pluck(model_outputs, "inputs", "Shuffled training years")
+  shuffled_training_years <- pluck(
+    model_outputs,
+    "inputs",
+    "Shuffled training years"
+  )
   training_years <- pluck(model_outputs, "inputs", "Training years")
   lagged_years <- pluck(model_outputs, "inputs", "Lagged years")
-  lagged_target_years <- pluck(model_outputs, "inputs", "Lagged target variable")
-  
+  lagged_target_years <- pluck(
+    model_outputs,
+    "inputs",
+    "Lagged target variable"
+  )
+
   test_statistic <- pluck(
     model_outputs,
     "evaluation_metrics"
-  ) |> 
+  ) |>
     filter(
       .metric == eval_metric
-    ) |> 
+    ) |>
     pull(test)
-  
+
   summary_record <- tibble(
     Date = Sys.time(),
     `Target variable` = target,
@@ -1750,44 +1840,45 @@ record_model_outputs <- function(model_outputs, eval_metric,
     `Tuning objective` = evaluation_metric,
     `Test set value` = test_statistic
   )
-  
+
   # calculate baseline scores
-  
+
   baseline_score <- c(
-    "same as last year", "linear"
-  ) |> 
+    "same as last year",
+    "linear"
+  ) |>
     map_df(
       ~ calculate_baseline_score(
         pluck(
-          model_outputs, "ft"
+          model_outputs,
+          "ft"
         ),
         target_variable = target_variable,
         projection_method = .x,
         n_years = 3
       )
-    ) |> 
+    ) |>
     mutate(
       method = paste0(
         "Baseline (",
         tolower(method),
         ")"
       )
-    ) |> 
+    ) |>
     pivot_wider(
       names_from = method,
       values_from = Baseline
     )
-    
-  
+
   # attach baseline to summary data
-  summary_record <- summary_record |> 
+  summary_record <- summary_record |>
     left_join(
       baseline_score,
       by = join_by(`Tuning objective`)
     )
-  
+
   output_file <- "tests/model_testing/model_summary_information.rds"
-  
+
   if (!file.exists(output_file)) {
     saveRDS(
       summary_record,
@@ -1800,63 +1891,68 @@ record_model_outputs <- function(model_outputs, eval_metric,
       ) |>
       saveRDS(output_file)
   }
-  
+
   return(summary_record)
 }
 
-calculate_baseline_score <- function(last_fit,
-                                     target_variable, 
-                                     projection_method,
-                                     n_years) {
- 
+calculate_baseline_score <- function(
+  last_fit,
+  target_variable,
+  projection_method,
+  n_years
+) {
   projection_method <- match.arg(
     projection_method,
     c("linear", "same as last year")
   )
-  
+
   # select required data
-  test_set_rows <- last_fit |> 
-    collect_predictions() |> 
+  test_set_rows <- last_fit |>
+    collect_predictions() |>
     pull(.row)
-    
-  data <- last_fit |> 
+
+  data <- last_fit |>
     pluck("splits", 1, "data")
-  
+
   model_method_type <- model_type(data)
-  
-  data <- data |> 
+
+  data <- data |>
     select(
-      "org", "year",
+      "org",
+      "year",
       value = all_of(target_variable)
     )
-  
+
   if (model_method_type == "difference from previous") {
-    data <- data |> 
-      mutate(value = NA_real_) |> 
-      rename(last_year = "year") |> 
-      update_missing_historic_values(target_variable) |> 
+    data <- data |>
+      mutate(value = NA_real_) |>
+      rename(last_year = "year") |>
+      update_missing_historic_values(target_variable) |>
       rename(
         year = "last_year"
       )
-  } 
-  
-  observed_predicted <- data |> 
-    slice(test_set_rows) |> 
+  }
+
+  observed_predicted <- data |>
+    slice(test_set_rows) |>
     rename(
       observed = "value"
     )
-  
+
   if (projection_method == "linear") {
-    projection_method_described <- paste0(str_to_sentence(projection_method),
-                                          " (",
-                                          n_years,
-                                          " years)")
-    
-    observed_predicted <- observed_predicted |> 
+    projection_method_described <- paste0(
+      str_to_sentence(projection_method),
+      " (",
+      n_years,
+      " years)"
+    )
+
+    observed_predicted <- observed_predicted |>
       group_by(
-        org, year
-      ) |> 
-      group_split() |> 
+        org,
+        year
+      ) |>
+      group_split() |>
       map_df(
         ~ complete(
           .x,
@@ -1868,45 +1964,50 @@ calculate_baseline_score <- function(last_fit,
           )
         ),
         .id = "prediction_group"
-      ) |> 
+      ) |>
       left_join(
         data,
         by = join_by(
-          year, org
+          year,
+          org
         )
-      ) |> 
+      ) |>
       rename(
         last_year = "year"
-      ) |> 
+      ) |>
       update_missing_historic_values(
         target_variable = target_variable
-      ) |> 
+      ) |>
       rename(
         year = "last_year"
-      ) |> 
+      ) |>
       mutate(
         value = case_when(
           !is.na(observed) ~ NA_real_,
           .default = value
         )
-      ) |> 
+      ) |>
       # remove groups where no previous year data exists
       filter(
         n() != sum(is.na(value)),
         .by = prediction_group
-      ) |> 
+      ) |>
       nest(
         data = !c(prediction_group, org)
-      ) |> 
+      ) |>
       mutate(
         fit = map(data, ~ lm(value ~ year, data = .x, na.action = na.omit)),
-        data = map2(fit, data, ~ bind_cols(.y, tibble(predicted = predict(.x, newdata = .y))))
-      ) |> 
-      select(!c(fit)) |> 
-      unnest(data) |> 
+        data = map2(
+          fit,
+          data,
+          ~ bind_cols(.y, tibble(predicted = predict(.x, newdata = .y)))
+        )
+      ) |>
+      select(!c(fit)) |>
+      unnest(data) |>
       filter(
         !is.na(observed)
-      ) |> 
+      ) |>
       select(
         "org",
         "year",
@@ -1915,69 +2016,66 @@ calculate_baseline_score <- function(last_fit,
       )
   } else if (projection_method == "same as last year") {
     projection_method_described <- projection_method
-    
-    observed_predicted <- observed_predicted |> 
+
+    observed_predicted <- observed_predicted |>
       mutate(
         last_year = year - 1
-      ) |> 
+      ) |>
       left_join(
         data,
         by = join_by(
-          org, 
+          org,
           last_year == year
         )
-      ) |> 
+      ) |>
       update_missing_historic_values(
         target_variable = target_variable
-      ) |> 
+      ) |>
       select(
         "org",
         "year",
         "observed",
         "predicted" = "value"
       )
-    
   }
-    
-  rmse <- observed_predicted  |> 
+
+  rmse <- observed_predicted |>
     yardstick::rmse(
       truth = observed,
       estimate = predicted
     )
-  mae <- observed_predicted  |> 
+  mae <- observed_predicted |>
     yardstick::mae(
       truth = observed,
       estimate = predicted
     )
-  mape <- observed_predicted  |> 
+  mape <- observed_predicted |>
     yardstick::mape(
       truth = observed,
       estimate = predicted
     )
-  smape <- observed_predicted  |> 
+  smape <- observed_predicted |>
     yardstick::smape(
       truth = observed,
       estimate = predicted
     )
-  
-  
+
   metrics <- bind_rows(
     rmse,
     mae,
     mape,
     smape
-  ) |> 
-    select(!c(".estimator")) |> 
+  ) |>
+    select(!c(".estimator")) |>
     rename(
       `Tuning objective` = ".metric",
       Baseline = ".estimate"
-    ) |> 
+    ) |>
     mutate(
       method = projection_method_described
     )
-  
+
   return(metrics)
-   
 }
 
 #' Where baseline mae are calculated, where we are assuming the prediction is
@@ -1988,7 +2086,7 @@ calculate_baseline_score <- function(last_fit,
 update_missing_historic_values <- function(data, target_variable) {
   fill_missing <- load_data(
     target_variable = target_variable
-  ) |> 
+  ) |>
     select(
       all_of(
         c(
@@ -1997,61 +2095,62 @@ update_missing_historic_values <- function(data, target_variable) {
           target_variable
         )
       )
-    ) |> 
+    ) |>
     rename(
       value = all_of(target_variable)
-    ) |> 
+    ) |>
     mutate(
       value = value / 100
     )
-  
-  missing_values <- data |> 
-    # filter(is.na(value)) |> 
+
+  missing_values <- data |>
+    # filter(is.na(value)) |>
     distinct(
-      org, 
+      org,
       last_year
-    ) |> 
+    ) |>
     inner_join(
       fill_missing,
       by = join_by(
-        org, 
+        org,
         last_year == year
       )
     )
-  
-  data <- data |> 
-    select(!c("value")) |> 
+
+  data <- data |>
+    select(!c("value")) |>
     left_join(
       missing_values,
       by = c("org", "last_year")
     )
-  
+
   return(data)
 }
 
 
 model_type <- function(data) {
-  type <- data |> 
-    select(!any_of(c("total_cases", "month", "quarter", "year", "nhs_region", "org"))) |>
+  type <- data |>
+    select(
+      !any_of(c("total_cases", "month", "quarter", "year", "nhs_region", "org"))
+    ) |>
     summarise(
-      across(everything(),
-             ~ sum(.x < 0, na.rm = TRUE))
-    ) |> 
+      across(everything(), ~ sum(.x < 0, na.rm = TRUE))
+    ) |>
     pivot_longer(
       cols = everything(),
       names_to = "metric",
       values_to = "number_negative"
-    ) |> 
+    ) |>
     summarise(
       type = sum(number_negative)
-    ) |> 
+    ) |>
     mutate(
       type = case_when(
         type > 0 ~ "difference from previous",
         .default = "proportion"
       )
-    ) |> 
+    ) |>
     pull(type)
-  
+
   return(type)
 }
